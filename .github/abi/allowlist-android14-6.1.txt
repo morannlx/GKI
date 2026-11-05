@@ -1,0 +1,10 @@
+# ABI allowlist for android14-6.1
+#
+# One line per accepted CRC deviation from stock GKI (android/abi_gki_aarch64.stg):
+#   <symbol><TAB><crc><TAB># why it is expected
+#
+# The gate fails the build when a watched symbol drifts and its exact
+# <symbol, crc> pair is not listed here. Generate the lines with a dispatch of
+# this family using abi_mode=update, then review them before committing: an entry
+# is a promise that this CRC change was intended, so a stale crc is itself a
+# failure - it means the symbol moved again.

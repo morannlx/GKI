@@ -106,6 +106,11 @@ on:
         description: "cgroup pids controller (changes CGROUP_SUBSYS_COUNT -> ABI drift)"
         type: boolean
         default: false
+      abi_mode:
+        description: "check = fail on unrecorded CRC drift, update = print allowlist lines"
+        type: choice
+        options: [check, update]
+        default: check
       use_ntsync:
         description: "NTSync"
         type: boolean
@@ -697,6 +702,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
@@ -727,6 +733,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
@@ -757,6 +764,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
@@ -787,6 +795,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
@@ -817,6 +826,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
@@ -847,6 +857,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
@@ -877,6 +888,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
@@ -912,6 +924,7 @@ jobs:
       brand_name: ${{ inputs.brand_name || 'Wild' }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
+      abi_mode: ${{ inputs.abi_mode || 'check' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
     secrets: inherit
