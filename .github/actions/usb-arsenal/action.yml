@@ -65,7 +65,17 @@ runs:
         SRC="${{ github.workspace }}/USB-Arsenal/kernel-patches/${PATCH_DIR}"
         [ -d "$SRC" ] || { echo "ERROR: $SRC missing from the USB-Arsenal checkout" >&2; exit 1; }
 
-        echo "USB-Arsenal: kernel ${{ inputs.kernel_version }} -> kernel-patches/${PATCH_DIR}"
+        # android13-5.10 rewrote do_read_toc (no case 0/1/2 switch), so three of
+        # upstream's 5.10 hunks have no target there and 0002 does not apply. Our
+        # ported set lives in the repo and is preferred when a family has one;
+        # everything still comes from upstream otherwise.
+        OVERRIDE="${{ github.workspace }}/.github/patches/usb-arsenal/${{ inputs.version }}"
+        if [ -d "$OVERRIDE" ]; then
+          SRC="$OVERRIDE"
+          echo "USB-Arsenal: kernel ${{ inputs.kernel_version }} -> repo port for ${{ inputs.version }} (upstream ${PATCH_DIR})"
+        else
+          echo "USB-Arsenal: kernel ${{ inputs.kernel_version }} -> kernel-patches/${PATCH_DIR}"
+        fi
 
         mapfile -t PATCHES < <(find "$SRC" -maxdepth 1 -name '*.patch' | sort)
         [ "${#PATCHES[@]}" -gt 0 ] || { echo "ERROR: no patches under $SRC" >&2; exit 1; }
