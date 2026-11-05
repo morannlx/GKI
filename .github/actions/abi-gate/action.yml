@@ -34,7 +34,10 @@ runs:
         MODE: ${{ inputs.mode }}
         ALLOWLIST: ${{ github.workspace }}/.github/abi/allowlist-${{ inputs.family }}.txt
       run: |
-        set -uo pipefail
+        # GitHub runs `shell: bash` as bash -e -o pipefail. -e turns any bare
+        # `[ -f x ] && cmd` guard or an expected non-zero grep into a step
+        # failure, so this step does its own error handling instead.
+        set +e
 
         OURS=$(find -L . "${OUT_DIR:-/home/runner/out}" -maxdepth 8 \
                  -name 'Module.symvers' -type f -size +0 2>/dev/null | head -n1)
@@ -78,8 +81,10 @@ runs:
 
         # drop the pairs we have on record
         : > /tmp/allowed.tsv
+        : > /tmp/allowed.tsv
         if [ -f "$ALLOWLIST" ]; then
-          grep -vE '^\s*(#|$)' "$ALLOWLIST" | awk -F'\t' 'NF>=2 {print $1"\t"$2}' \
+          grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST" \
+            | awk -F'\t' 'NF>=2 {print $1"\t"$2}' \
             | LC_ALL=C sort -u > /tmp/allowed.tsv
         fi
         LC_ALL=C join -t $'\t' -v1 -1 1 -2 1 <(LC_ALL=C sort -u /tmp/drift.tsv) /tmp/allowed.tsv > /tmp/unexplained.tsv
