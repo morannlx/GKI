@@ -14,9 +14,13 @@ runs:
       run: |
         set -uo pipefail
 
-        OUT="${OUT_DIR:-/home/runner/out}/common"
-        OURS="$OUT/Module.symvers"
-        STOCK="$OUT/abi_symbollist.raw"
+        # Path differs per build system: build/build.sh leaves symvers under
+        # $OUT_DIR/common, kleaf leaves it under bazel-bin/. Search rather than
+        # assume, and follow bazel-bin's symlink.
+        OURS=$(find -L . "${OUT_DIR:-/home/runner/out}" -maxdepth 8 \
+                 -name 'Module.symvers' -type f -size +0 2>/dev/null | head -n1)
+        STOCK=$(find -L . "${OUT_DIR:-/home/runner/out}" -maxdepth 8 \
+                  -name 'abi_symbollist.raw' -type f -size +0 2>/dev/null | head -n1)
 
         # Structs worth watching, and the configs that move them:
         #   make_kuid/from_kuid/...   struct user_namespace  (ucount enum, fanotify)
@@ -25,10 +29,12 @@ runs:
         #   sched_*/wake_up_process   struct task_struct     (CFS_BANDWIDTH on 6.18)
         WATCH='^(make_kuid|from_kuid|make_kgid|from_kgid|make_kprojid|from_kprojid|current_in_userns|__put_user_ns|cgroup_path_ns|cgroup_get_from_path|cgroup_get_from_fd|cgroup_get_from_id|cgroup_attach_task_all|css_task_iter_start|css_task_iter_next|css_task_iter_end|sched_setscheduler|sched_setscheduler_nocheck|sched_setattr|wake_up_process|task_prio|sched_show_task|fsnotify_.*)$'
 
-        if [ ! -f "$OURS" ]; then
-          echo "ABI watchlist: no Module.symvers at $OURS (skipped)"
+        if [ -z "${OURS:-}" ] || [ ! -f "$OURS" ]; then
+          echo "ABI watchlist: no Module.symvers found (skipped). Candidates:"
+          find -L . "${OUT_DIR:-/home/runner/out}" -maxdepth 5 -name '*.symvers' -o -maxdepth 5 -name 'abi_symbollist*' 2>/dev/null | head -5
           exit 0
         fi
+        echo "ABI watchlist: ours=$OURS stock=${STOCK:-<not found>}"
 
         ours=$(awk -v re="$WATCH" '$2 ~ re {print $2"\t"$1}' "$OURS" | sort)
         stock=""
