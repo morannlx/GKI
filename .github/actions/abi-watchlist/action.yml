@@ -1,0 +1,60 @@
+name: 'ABI watchlist'
+description: 'Print the CRCs this build gave the ABI-sensitive symbols, next to the stock ones'
+
+runs:
+  using: composite
+  steps:
+    - name: Compare watchlist CRCs against the stock symbol list
+      # Every GKI build already runs compare_to_symbol_list against
+      # abi_symbollist.raw, but its output is one line. A config that grows a
+      # struct only shows up as a changed CRC on the handful of exported symbols
+      # whose prototypes mention that struct, so this prints those CRCs directly:
+      # ours from Module.symvers, stock from abi_symbollist.raw, side by side.
+      shell: bash
+      run: |
+        set -uo pipefail
+
+        OUT="${OUT_DIR:-/home/runner/out}/common"
+        OURS="$OUT/Module.symvers"
+        STOCK="$OUT/abi_symbollist.raw"
+
+        # Structs worth watching, and the configs that move them:
+        #   make_kuid/from_kuid/...   struct user_namespace  (ucount enum, fanotify)
+        #   fsnotify_*                struct fsnotify_group  (fanotify)
+        #   cgroup_*/css_task_iter_*  struct cgroup, struct css_set (CGROUP_PIDS)
+        #   sched_*/wake_up_process   struct task_struct     (CFS_BANDWIDTH on 6.18)
+        WATCH='^(make_kuid|from_kuid|make_kgid|from_kgid|make_kprojid|from_kprojid|current_in_userns|__put_user_ns|cgroup_path_ns|cgroup_get_from_path|cgroup_get_from_fd|cgroup_get_from_id|cgroup_attach_task_all|css_task_iter_start|css_task_iter_next|css_task_iter_end|sched_setscheduler|sched_setscheduler_nocheck|sched_setattr|wake_up_process|task_prio|sched_show_task|fsnotify_.*)$'
+
+        if [ ! -f "$OURS" ]; then
+          echo "ABI watchlist: no Module.symvers at $OURS (skipped)"
+          exit 0
+        fi
+
+        ours=$(awk -v re="$WATCH" '$2 ~ re {print $2"\t"$1}' "$OURS" | sort)
+        stock=""
+        [ -f "$STOCK" ] && stock=$(awk -v re="$WATCH" '$2 ~ re {print $2"\t"$1}' "$STOCK" | sort)
+
+        {
+          echo ""
+          echo "### ABI watchlist"
+          echo ""
+          echo "| symbol | this build | stock | verdict |"
+          echo "|---|---|---|---|"
+          if [ -n "$stock" ]; then
+            join -t $'\t' -a1 -e'-' -o 0,1.2,2.2 <(echo "$ours") <(echo "$stock") \
+              | awk -F'\t' '{v=($3=="-"||$2==$3)?"same":"DRIFT"; printf "| %s | %s | %s | %s |\n", $1,$2,$3,v}'
+          else
+            echo "$ours" | awk -F'\t' '{printf "| %s | %s | n/a | - |\n", $1,$2}'
+          fi
+          echo ""
+        } | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+        if [ -n "$stock" ]; then
+          drift=$(join -t $'\t' -a1 -e'-' -o 0,1.2,2.2 <(echo "$ours") <(echo "$stock") \
+            | awk -F'\t' '$3!="-" && $2!=$3 {print $1}' | tr '\n' ' ')
+          if [ -n "$drift" ]; then
+            echo "ABI WATCHLIST DRIFT: $drift"
+          else
+            echo "ABI watchlist: every watched symbol matches the stock CRC"
+          fi
+        fi

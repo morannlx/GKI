@@ -29,6 +29,19 @@ runs:
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_KALLSYMS=y
           CONFIG_KALLSYMS_ALL=y
+          # Container CPU limits (cpu.max / cgroup v2 CPU bandwidth).
+          #
+          # Unlike fanotify this needs no port: CONFIG_CFS_BANDWIDTH touches
+          # nothing in include/, so no ABI-visible struct moves and no exported
+          # symbol appears or disappears - verified on android12-5.10,
+          # android13-5.15, android14-6.1 (include/linux/sched.h: 0 references)
+          # and android16-6.12 (whole include/: 0 references). FAIR_GROUP_SCHED,
+          # which it depends on, is already =y in every stock GKI defconfig, so
+          # struct sched_entity is unchanged.
+          # On android17-6.18 it does add three task_struct fields
+          # (sched_throttle_work/throttle_node/throttled), but stock 6.18 already
+          # sets CFS_BANDWIDTH=y, so those fields are part of the stock ABI there.
+          CONFIG_CFS_BANDWIDTH=y
           # FANOTIFY IS DISABLED ON PURPOSE - do not re-add these two lines here.
           #
           # CONFIG_FANOTIFY moves two type layouts that are part of the GKI module
