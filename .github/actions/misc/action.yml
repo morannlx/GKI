@@ -41,7 +41,9 @@ runs:
           # On android17-6.18 it does add three task_struct fields
           # (sched_throttle_work/throttle_node/throttled), but stock 6.18 already
           # sets CFS_BANDWIDTH=y, so those fields are part of the stock ABI there.
-          CONFIG_CFS_BANDWIDTH=y
+          # CONFIG_CFS_BANDWIDTH lives in build.yml now (feature token CFSBW) so it
+          # can be A/B'd; see the note there about struct cfs_rq and the android
+          # vendor-hook tracepoints.
           # FANOTIFY IS DISABLED ON PURPOSE - do not re-add these two lines here.
           #
           # CONFIG_FANOTIFY moves two type layouts that are part of the GKI module

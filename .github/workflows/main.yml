@@ -106,6 +106,10 @@ on:
         description: "cgroup pids controller (changes CGROUP_SUBSYS_COUNT -> ABI drift)"
         type: boolean
         default: false
+      use_cfs_bw:
+        description: "CONFIG_CFS_BANDWIDTH for cgroup cpu.max (moves struct rq CRCs)"
+        type: boolean
+        default: true
       abi_mode:
         description: "check = fail on unrecorded CRC drift, update = print allowlist lines"
         type: choice
@@ -542,6 +546,7 @@ jobs:
             F_DS=true;     F_USBA=true;    F_NTSYNC=true; F_PTRACE=true; F_UNICODE=true
             F_FANOTIFY=false
             F_PIDS=false
+            F_CFSBW=true
             F_BPF=true;    F_PERF=false
           else
             F_SUSFS="${{ inputs.use_susfs }}";   F_NOMOUNT="${{ inputs.use_nomount }}"
@@ -549,6 +554,7 @@ jobs:
             F_DS="${{ inputs.use_ds }}";          F_USBA="${{ inputs.use_usba }}"
             F_FANOTIFY="${{ inputs.use_fanotify }}"
             F_PIDS="${{ inputs.use_pids }}"
+            F_CFSBW="${{ inputs.use_cfs_bw }}"
             F_NTSYNC="${{ inputs.use_ntsync }}"
             F_PTRACE="${{ inputs.use_ptrace }}";  F_UNICODE="${{ inputs.use_unicode }}"
             F_BPF="${{ inputs.use_bpf }}";        F_PERF="${{ inputs.use_perf }}"
@@ -563,6 +569,7 @@ jobs:
           [ "$F_USBA" = "true" ] && FEATURES="${FEATURES}USBA+"
           [ "$F_FANOTIFY" = "true" ] && FEATURES="${FEATURES}FANOTIFY+"
           [ "$F_PIDS" = "true" ] && FEATURES="${FEATURES}PIDS+"
+          [ "$F_CFSBW" = "true" ] && FEATURES="${FEATURES}CFSBW+"
           [ "$F_NTSYNC" = "true" ] && FEATURES="${FEATURES}NTSync+"
           [ "$F_PTRACE" = "true" ] && FEATURES="${FEATURES}Ptrace+"
           [ "$F_UNICODE" = "true" ] && FEATURES="${FEATURES}Unicode+"
