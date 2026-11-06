@@ -47,7 +47,7 @@ DECLARE_PER_CPU(struct cfs_bw_cpu, cfs_bw_nostate);
 
 static inline struct cfs_bw_cpu *cfs_rq_bw(struct cfs_rq *cfs_rq)
 {
-	struct cfs_bandwidth *cfs_b = cfs_bw_of(cfs_rq->tg);
+	struct cfs_bw_state *cfs_b = cfs_bw_of(cfs_rq->tg);
 	unsigned int cpu = (cfs_rq)->rq->cpu;
 
 	if (unlikely(!cfs_b->cpu_state))
@@ -61,16 +61,16 @@ static inline struct cfs_bw_cpu *cfs_rq_bw(struct cfs_rq *cfs_rq)
  * callers need the owning cfs_rq back. The entry's index in the group's array is
  * its cpu, and the group owns one cfs_rq per cpu.
  */
-static inline struct task_group *cfs_bw_to_tg(struct cfs_bandwidth *cfs_b)
+static inline struct task_group *cfs_bw_to_tg(struct cfs_bw_state *cfs_b)
 {
 	if (cfs_b == &root_cfs_bw)
 		return &root_task_group;
 
 	return (struct task_group *)((char *)cfs_b -
-				     offsetof(struct task_group_alloc, cfs_b));
+				     offsetof(struct task_group_alloc, state));
 }
 
-static inline struct cfs_rq *cfs_bw_to_cfs_rq(struct cfs_bandwidth *cfs_b,
+static inline struct cfs_rq *cfs_bw_to_cfs_rq(struct cfs_bw_state *cfs_b,
 					      struct cfs_bw_cpu *bw)
 {
 	struct task_group *tg = cfs_bw_to_tg(cfs_b);
@@ -292,7 +292,9 @@ def main() -> None:
             body_tg = tg.group(2)
             if "struct cfs_bandwidth\tcfs_bandwidth;" not in body_tg:
                 die("sched.h: task_group has no cfs_bandwidth member to remove")
-            body_tg = body_tg.replace("\n\tstruct cfs_bandwidth\tcfs_bandwidth;", "")
+            # keep the member: genksyms hashes the member LIST, and a config-off
+            # build has `struct cfs_bandwidth cfs_bandwidth;` present but empty.
+            # It is the TYPE that has to stay empty, which stage 3 arranges.
             s2 = s2[:tg.start(2)] + body_tg + s2[tg.end(2):]
 
             helper = """
@@ -304,22 +306,22 @@ def main() -> None:
  * to stay exactly what a config-off build produces.
  */
 extern struct task_group root_task_group;
-extern struct cfs_bandwidth root_cfs_bw;
+extern struct cfs_bw_state root_cfs_bw;
 
 /* cfs_bw_tg_alloc_marker: stage-2 guard, keep this string unique */
 /* one allocation carries both, so no extra pointer and no lookup */
 struct task_group_alloc {
 	struct task_group	tg;
-	struct cfs_bandwidth	cfs_b;
+	struct cfs_bw_state	state;
 };
 
-static inline struct cfs_bandwidth *cfs_bw_of(struct task_group *tg)
+static inline struct cfs_bw_state *cfs_bw_of(struct task_group *tg)
 {
 	if (tg == &root_task_group)
 		return &root_cfs_bw;
 
-	return (struct cfs_bandwidth *)((char *)tg +
-					offsetof(struct task_group_alloc, cfs_b));
+	return (struct cfs_bw_state *)((char *)tg +
+				       offsetof(struct task_group_alloc, state));
 }
 #endif /* CONFIG_CFS_BANDWIDTH */
 """
@@ -374,6 +376,54 @@ static inline struct cfs_bandwidth *cfs_bw_of(struct task_group *tg)
             if k or k2:
                 write(fp, t2)
                 print(f"  {rel}: {k + k2} cfs_bandwidth access(es) rewritten")
+
+
+
+        # ---- 8. keep the member, empty the type ------------------------------
+        # genksyms hashes a struct's member LIST, not only its size: a config-off
+        # build has `struct cfs_bandwidth cfs_bandwidth;` inside task_group, just
+        # with an empty type. So the member stays, and the REAL state type is
+        # renamed to cfs_bw_state and moved into the tail block. `struct
+        # cfs_bandwidth` is left behind as an empty placeholder.
+        s3 = read(sched_h)
+        if "struct cfs_bw_state {" not in s3:
+            member = "\tstruct cfs_bandwidth\tcfs_bandwidth;"
+            if member not in s3:
+                die("sched.h: task_group's cfs_bandwidth member is missing")
+            s3 = s3.replace(member, "\t/*CFFS_BW_MEMBER_KEEP*/", 1)
+            s3 = s3.replace("struct cfs_bandwidth", "struct cfs_bw_state")
+            s3 = s3.replace("\t/*CFFS_BW_MEMBER_KEEP*/", member, 1)
+
+            # the placeholder itself must keep the old name and be empty
+            s3 = s3.replace("struct cfs_bw_state {\n};", "struct cfs_bandwidth {\n};")
+            if "struct cfs_bandwidth {" not in s3:
+                anchor = re.search(r"struct cfs_bw_state \{\n.*?\n\};\n", s3, re.S)
+                s3 = s3[:anchor.end()] + (
+                    "\n/* ABI placeholder: task_group holds this member and a config-off\n"
+                    " * build has it empty, so it has to stay empty here too. The real\n"
+                    " * state is struct cfs_bw_state, in the task_group tail block. */\n"
+                    "struct cfs_bandwidth {\n};\n") + s3[anchor.end():]
+            write(sched_h, s3)
+            print("  sched.h: real type renamed to cfs_bw_state, empty cfs_bandwidth kept")
+
+        # every other file that names the type
+        for rel in ("kernel/sched/core.c", "kernel/sched/fair.c", "kernel/sched/debug.c",
+                    "kernel/sched/stats.c", "kernel/sched/pelt.h", "kernel/sched/pelt.c",
+                    "kernel/sched/sysctl.c", "kernel/sched/topology.c"):
+            fp = os.path.join(root, rel)
+            if not os.path.exists(fp):
+                continue
+            t = read(fp)
+            if "struct cfs_bandwidth" not in t:
+                continue
+            t2 = t.replace("struct cfs_bandwidth", "struct cfs_bw_state")
+            write(fp, t2)
+            print(f"  {rel}: type renamed")
+
+        # the root state is the renamed type
+        s = read(core_c)
+        s = s.replace("struct cfs_bandwidth root_cfs_bw;", "struct cfs_bw_state root_cfs_bw;")
+        write(core_c, s)
 
 
     # ---- verify -------------------------------------------------------------
