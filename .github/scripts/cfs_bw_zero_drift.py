@@ -47,7 +47,7 @@ DECLARE_PER_CPU(struct cfs_bw_cpu, cfs_bw_nostate);
 
 static inline struct cfs_bw_cpu *cfs_rq_bw(struct cfs_rq *cfs_rq)
 {
-	struct cfs_bandwidth *cfs_b = &cfs_rq->tg->cfs_bandwidth;
+	struct cfs_bandwidth *cfs_b = cfs_bw_of(cfs_rq->tg);
 	unsigned int cpu = (cfs_rq)->rq->cpu;
 
 	if (unlikely(!cfs_b->cpu_state))
@@ -109,7 +109,8 @@ def main() -> None:
     root = sys.argv[1].rstrip("/")
     sched_h = os.path.join(root, "kernel/sched/sched.h")
     fair_c = os.path.join(root, "kernel/sched/fair.c")
-    for p in (sched_h, fair_c):
+    core_c = os.path.join(root, "kernel/sched/core.c")
+    for p in (sched_h, fair_c, core_c):
         if not os.path.exists(p):
             die(f"{p}: not found")
 
@@ -263,6 +264,102 @@ def main() -> None:
             write(fair_c, s)
             print("  fair.c: cpu_state allocated in init_cfs_bandwidth(), freed in destroy")
 
+
+        # ---- 7. take cfs_bandwidth out of struct task_group -------------------
+        # struct task_group is EXPORT_SYMBOL_GPL'd (root_task_group), so its CRC
+        # encodes the struct's SIZE - and with the config on it is ~200 bytes
+        # bigger because struct cfs_bandwidth is embedded by value. That alone
+        # moves root_task_group, and through the type graph it moves the 142 rq
+        # symbols. With the config off the member is an empty struct (0 bytes), so
+        # removing it restores the stock size exactly.
+        s2 = read(sched_h)
+        if "cfs_bw_of" not in s2:
+            tg = re.search(r"(struct task_group \{\n)(.*?)(\n\};\n)", s2, re.S)
+            if not tg:
+                die("sched.h: struct task_group not found")
+            body_tg = tg.group(2)
+            if "struct cfs_bandwidth\tcfs_bandwidth;" not in body_tg:
+                die("sched.h: task_group has no cfs_bandwidth member to remove")
+            body_tg = body_tg.replace("\n\tstruct cfs_bandwidth\tcfs_bandwidth;", "")
+            s2 = s2[:tg.start(2)] + body_tg + s2[tg.end(2):]
+
+            helper = """
+#ifdef CONFIG_CFS_BANDWIDTH
+/*
+ * The bandwidth state lives in the tail of the task_group allocation (or in a
+ * dedicated static for the root group) instead of inside struct task_group,
+ * because struct task_group'\''s size is exported through root_task_group and
+ * must stay exactly what a config-off build has.
+ */
+extern struct task_group root_task_group;
+extern struct cfs_bandwidth root_cfs_bw;
+
+static inline struct cfs_bandwidth *cfs_bw_of(struct task_group *tg)
+{
+	if (tg == &root_task_group)
+		return &root_cfs_bw;
+
+	return (struct cfs_bandwidth *)((char *)tg + sizeof(struct task_group));
+}
+
+/* the allocation carries the state in its tail */
+struct task_group_alloc {
+	struct task_group	tg;
+	struct cfs_bandwidth	cfs_b;
+};
+#endif /* CONFIG_CFS_BANDWIDTH */
+"""
+            anchor = re.search(r"struct task_group \{\n.*?\n\};\n", s2, re.S)
+            s2 = s2[:anchor.end()] + helper + s2[anchor.end():]
+            write(sched_h, s2)
+            print("  sched.h: cfs_bandwidth out of struct task_group, cfs_bw_of() added")
+
+        # fair.c: the helper delegates now
+        s = read(fair_c)
+        s = s.replace("""static inline struct cfs_bandwidth *tg_cfs_bandwidth(struct task_group *tg)
+{
+	return &tg->cfs_bandwidth;
+}""", """static inline struct cfs_bandwidth *tg_cfs_bandwidth(struct task_group *tg)
+{
+	return cfs_bw_of(tg);
+}""")
+        write(fair_c, s)
+
+        # core.c: root state, cache size, and every direct member use
+        s = read(core_c)
+        s = s.replace("init_cfs_bandwidth(&root_task_group.cfs_bandwidth)",
+                      "init_cfs_bandwidth(cfs_bw_of(&root_task_group))")
+        s = s.replace("task_group_cache = KMEM_CACHE(task_group, 0);",
+                      "task_group_cache = KMEM_CACHE(task_group_alloc, 0);")
+        if "struct cfs_bandwidth root_cfs_bw;" not in s:
+            s = s.replace("struct task_group root_task_group;",
+                          "struct task_group root_task_group;\n"
+                          "#ifdef CONFIG_CFS_BANDWIDTH\n"
+                          "/* mirrors the tail slot that dynamic groups get */\n"
+                          "struct cfs_bandwidth root_cfs_bw;\n"
+                          "#endif", 1)
+        # the target can itself be a chain (tg->parent->cfs_bandwidth)
+        s, n_amp = re.subn(r"&(\w+(?:->\w+)*)->cfs_bandwidth\b", r"cfs_bw_of(\1)", s)
+        # both member spellings: tg->cfs_bandwidth.x and tg->cfs_bandwidth->x
+        s, n_dot = re.subn(r"\b(\w+(?:->\w+)*)->cfs_bandwidth\.", r"cfs_bw_of(\1)->", s)
+        s, n_arrow = re.subn(r"\b(\w+(?:->\w+)*)->cfs_bandwidth->", r"cfs_bw_of(\1)->", s)
+        write(core_c, s)
+        print(f"  core.c: root state + cache size, {n_amp} '&tg->cfs_bandwidth', "
+              f"{n_dot} 'tg->cfs_bandwidth.', {n_arrow} 'tg->cfs_bandwidth->' rewritten")
+
+        # remaining direct accesses anywhere else in the scheduler
+        for rel in ("kernel/sched/fair.c", "kernel/sched/debug.c", "kernel/sched/stats.c"):
+            fp = os.path.join(root, rel)
+            if not os.path.exists(fp):
+                continue
+            t = read(fp)
+            t2, k = re.subn(r"&(\w+(?:->\w+)*)->cfs_bandwidth\b", r"cfs_bw_of(\1)", t)
+            t2, k2 = re.subn(r"\b(\w+(?:->\w+)*)->cfs_bandwidth[.>-]", r"cfs_bw_of(\1)->", t2)
+            if k or k2:
+                write(fp, t2)
+                print(f"  {rel}: {k + k2} cfs_bandwidth access(es) rewritten")
+
+
     # ---- verify -------------------------------------------------------------
     problems = []
     sched_now = read(sched_h)
@@ -305,6 +402,18 @@ def main() -> None:
 
     if leftovers:
         problems.append("unrewritten access: " + "; ".join(leftovers[:5]))
+
+    for rel in ("kernel/sched/core.c", "kernel/sched/fair.c", "kernel/sched/debug.c",
+                "kernel/sched/sched.h"):
+        fp = os.path.join(root, rel)
+        if not os.path.exists(fp):
+            continue
+        for i, line in enumerate(read(fp).splitlines(), 1):
+            st = line.lstrip()
+            if st.startswith(("*", "/*", "//")):
+                continue
+            if re.search(r"->cfs_bandwidth\b", line):
+                problems.append(f"{rel}:{i}: direct cfs_bandwidth access left")
 
     if problems:
         die("verification failed:\n  - " + "\n  - ".join(problems))
