@@ -99,15 +99,15 @@ on:
         type: boolean
         default: true
       use_fanotify:
-        description: "fanotify + FAN_OPEN_PERM (ported, keeps the stock ABI)"
+        description: "fanotify + FAN_OPEN_PERM (ported to keep stock CRCs; gated by the ABI check)"
         type: boolean
         default: false
       use_pids:
-        description: "cgroup pids controller (changes CGROUP_SUBSYS_COUNT -> ABI drift)"
+        description: "cgroup pids controller - moves 3,202 CRCs, so the ABI gate fails the build"
         type: boolean
         default: false
       use_cfs_bw:
-        description: "CONFIG_CFS_BANDWIDTH for cgroup cpu.max (moves 143 struct rq CRCs)"
+        description: "CONFIG_CFS_BANDWIDTH (cpu.max) - moves 142 CRCs, so the ABI gate fails"
         type: boolean
         default: false
       abi_mode:
