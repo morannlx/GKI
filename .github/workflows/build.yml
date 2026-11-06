@@ -431,11 +431,13 @@ jobs:
       # misses it.
       # Dispatch with use_cfs_bw=false to build without it.
       - name: CPU bandwidth control (cgroup cpu.max)
+        # The config alone moves 142 CRCs (struct cfs_rq -> struct rq -> the
+        # android_rvh vendor-hook tracepoints), so it always goes together with
+        # the zero-drift port. Still opt-in: dispatch with use_cfs_bw=true.
         if: contains(inputs.feature_set, 'CFSBW')
-        uses: ./.github/actions/set-kernel-config
+        uses: ./.github/actions/cfs-bw
         with:
-          config_list: |
-            CONFIG_CFS_BANDWIDTH=y
+          version: ${{ inputs.version }}
 
       # OFF BY DEFAULT: CONFIG_CGROUP_PIDS is the one cgroup config that cannot
       # be relocated the way fanotify was. It does not add private state to a

@@ -1,0 +1,34 @@
+name: 'cfs bandwidth (zero ABI drift)'
+description: 'Enable CONFIG_CFS_BANDWIDTH without moving struct rq CRCs'
+
+inputs:
+  version:
+    description: 'Kernel config family (e.g. android14-6.1)'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Hoist the per-cfs_rq bandwidth state out of struct cfs_rq
+      # CONFIG_CFS_BANDWIDTH adds ten fields to struct cfs_rq. struct rq embeds a
+      # cfs_rq, struct rq * is in exported prototypes (__task_rq_lock,
+      # __migrate_task, __balance_callbacks, every __traceiter_android_rvh_*), so
+      # genksyms expands it and 142 CRCs move - which is why prebuilt vendor
+      # modules that register an rvh hook stop loading.
+      #
+      # The script moves those fields into a per-(task_group, cpu) block reached
+      # through struct cfs_bandwidth, which is outside the CRC surface (turning
+      # the config on already grows struct task_group by a whole cfs_bandwidth and
+      # only the 142 rq symbols moved). Access becomes one extra dereference.
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        python3 "${{ github.workspace }}/.github/scripts/cfs_bw_zero_drift.py" "$PWD"
+
+    - name: Enable CFS bandwidth control
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          # cgroup v2 cpu.max / cpu.weight quota. Safe only together with the port
+          # above; the ABI gate verifies the result.
+          CONFIG_CFS_BANDWIDTH=y
