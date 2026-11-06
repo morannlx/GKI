@@ -273,7 +273,10 @@ def main() -> None:
         # symbols. With the config off the member is an empty struct (0 bytes), so
         # removing it restores the stock size exactly.
         s2 = read(sched_h)
-        if "cfs_bw_of" not in s2:
+        # guard on the struct, not on the accessor name - stage 1 already writes
+        # cfs_bw_of() into the fallback accessor, which silently skipped this
+        # whole stage on the last build
+        if "struct task_group_alloc" not in s2:
             tg = re.search(r"(struct task_group \{\n)(.*?)(\n\};\n)", s2, re.S)
             if not tg:
                 die("sched.h: struct task_group not found")
@@ -287,26 +290,27 @@ def main() -> None:
 #ifdef CONFIG_CFS_BANDWIDTH
 /*
  * The bandwidth state lives in the tail of the task_group allocation (or in a
- * dedicated static for the root group) instead of inside struct task_group,
- * because struct task_group'\''s size is exported through root_task_group and
- * must stay exactly what a config-off build has.
+ * dedicated static for the root group) rather than inside struct task_group,
+ * because sizeof(struct task_group) is exported through root_task_group and has
+ * to stay exactly what a config-off build produces.
  */
 extern struct task_group root_task_group;
 extern struct cfs_bandwidth root_cfs_bw;
+
+/* one allocation carries both, so no extra pointer and no lookup */
+struct task_group_alloc {
+	struct task_group	tg;
+	struct cfs_bandwidth	cfs_b;
+};
 
 static inline struct cfs_bandwidth *cfs_bw_of(struct task_group *tg)
 {
 	if (tg == &root_task_group)
 		return &root_cfs_bw;
 
-	return (struct cfs_bandwidth *)((char *)tg + sizeof(struct task_group));
+	return (struct cfs_bandwidth *)((char *)tg +
+					offsetof(struct task_group_alloc, cfs_b));
 }
-
-/* the allocation carries the state in its tail */
-struct task_group_alloc {
-	struct task_group	tg;
-	struct cfs_bandwidth	cfs_b;
-};
 #endif /* CONFIG_CFS_BANDWIDTH */
 """
             anchor = re.search(r"struct task_group \{\n.*?\n\};\n", s2, re.S)
