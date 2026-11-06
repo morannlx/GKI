@@ -56,6 +56,20 @@ static inline struct cfs_bw_cpu *cfs_rq_bw(struct cfs_rq *cfs_rq)
 	return &cfs_b->cpu_state[cpu];
 }
 
+/*
+ * The throttled list links cfs_bw_cpu entries now, so list_for_each_entry()
+ * callers need the owning cfs_rq back. The entry's index in the group's array is
+ * its cpu, and the group owns one cfs_rq per cpu.
+ */
+static inline struct cfs_rq *cfs_bw_to_cfs_rq(struct cfs_bandwidth *cfs_b,
+					      struct cfs_bw_cpu *bw)
+{
+	struct task_group *tg = container_of(cfs_b, struct task_group, cfs_bandwidth);
+	unsigned int cpu = bw - cfs_b->cpu_state;
+
+	return tg->cfs_rq[cpu];
+}
+
 /* every former cfs_rq-><bw field> goes through here */
 #define CFS_BW(cfs_rq)	cfs_rq_bw(cfs_rq)
 #endif /* CONFIG_CFS_BANDWIDTH */
@@ -184,6 +198,37 @@ def main() -> None:
         if not total:
             die("no access sites rewritten - the field list did not match this tree")
 
+        # ---- 5b. the throttled-list walk ------------------------------------
+        # list_for_each_entry_rcu(cfs_rq, &cfs_b->throttled_cfs_rq, throttled_list)
+        # passes the member name as an argument, not through "->", so it is not an
+        # access site - it has to be converted to iterate the new block.
+        s = read(fair_c)
+        walk = re.search(
+            r"\tlist_for_each_entry_rcu\(cfs_rq, &cfs_b->throttled_cfs_rq,\n"
+            r"\t+throttled_list\) \{\n"
+            r"\t\tstruct rq \*rq = rq_of\(cfs_rq\);\n"
+            r"\t\tstruct rq_flags rf;\n", s)
+        if walk:
+            # assign into the existing cfs_rq rather than shadowing it - an
+            # unused outer variable is a -Werror build failure
+            s = s[:walk.start()] + (
+                "\tlist_for_each_entry_rcu(bw, &cfs_b->throttled_cfs_rq,\n"
+                "\t\t\t\tthrottled_list) {\n"
+                "\t\tstruct rq *rq;\n"
+                "\t\tstruct rq_flags rf;\n"
+                "\n"
+                "\t\tcfs_rq = cfs_bw_to_cfs_rq(cfs_b, bw);\n"
+                "\t\trq = rq_of(cfs_rq);\n"
+            ) + s[walk.end():]
+            decl = re.search(r"(static void distribute_cfs_runtime\(struct cfs_bandwidth \*cfs_b\)\n\{\n)(\tstruct cfs_rq \*cfs_rq;\n)", s)
+            if not decl:
+                die("fair.c: distribute_cfs_runtime() declaration block not found")
+            s = s[:decl.end()] + "\tstruct cfs_bw_cpu *bw;\n" + s[decl.end():]
+            write(fair_c, s)
+            print("  fair.c: throttled-list walk converted to cfs_bw_cpu")
+        else:
+            print("  fair.c: no throttled-list walk found (already converted?)")
+
         # ---- 6. allocate / free ---------------------------------------------
         s = read(fair_c)
 
@@ -250,6 +295,14 @@ def main() -> None:
             for f in fields_used:
                 if re.search(r"->" + re.escape(f) + r"\b", line) and "CFS_BW(" not in line:
                     leftovers.append(f"{rel}:{i}: {st[:80]}")
+    for rel in ("kernel/sched/fair.c", "kernel/sched/core.c", "kernel/sched/debug.c"):
+        fp = os.path.join(root, rel)
+        if not os.path.exists(fp):
+            continue
+        for i, line in enumerate(read(fp).splitlines(), 1):
+            if re.search(r"[, ]throttled_list\)", line) and "list_for_each" not in line:
+                leftovers.append(f"{rel}:{i}: bare throttled_list argument")
+
     if leftovers:
         problems.append("unrewritten access: " + "; ".join(leftovers[:5]))
 
