@@ -61,10 +61,19 @@ static inline struct cfs_bw_cpu *cfs_rq_bw(struct cfs_rq *cfs_rq)
  * callers need the owning cfs_rq back. The entry's index in the group's array is
  * its cpu, and the group owns one cfs_rq per cpu.
  */
+static inline struct task_group *cfs_bw_to_tg(struct cfs_bandwidth *cfs_b)
+{
+	if (cfs_b == &root_cfs_bw)
+		return &root_task_group;
+
+	return (struct task_group *)((char *)cfs_b -
+				     offsetof(struct task_group_alloc, cfs_b));
+}
+
 static inline struct cfs_rq *cfs_bw_to_cfs_rq(struct cfs_bandwidth *cfs_b,
 					      struct cfs_bw_cpu *bw)
 {
-	struct task_group *tg = container_of(cfs_b, struct task_group, cfs_bandwidth);
+	struct task_group *tg = cfs_bw_to_tg(cfs_b);
 	unsigned int cpu = bw - cfs_b->cpu_state;
 
 	return tg->cfs_rq[cpu];
