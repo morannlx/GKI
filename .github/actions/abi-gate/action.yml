@@ -1,42 +1,44 @@
 name: 'ABI gate'
-description: 'Fail the build when a symbol CRC differs from stock GKI and is not in the committed allowlist'
+description: 'Fail the build if any symbol CRC differs from the stock GKI ABI of the tree being built'
 
 inputs:
   family:
-    description: 'Config family (android14-6.1); used to pick the allowlist'
+    description: 'Config family (android14-6.1) - reported in the log'
     required: true
   mode:
-    description: 'check = fail on unlisted drift, update = print the allowlist lines to commit'
+    description: 'check = fail on ANY drift, update = only report what drifted'
     required: false
     default: check
 
 runs:
   using: composite
   steps:
-    - name: Compare Module.symvers CRCs against stock GKI
+    - name: Compare Module.symvers CRCs against the stock GKI ABI
+      # Policy: every build keeps the stock ABI of the kernel it is built from.
+      # There is no allowlist and no exception list - if a symbol's CRC is not
+      # the stock one, the leg fails. Features that cannot keep stock CRCs are
+      # therefore off by default: fanotify is ported to stay byte-identical,
+      # CFS_BANDWIDTH (moves struct rq) and CGROUP_PIDS (moves the cgroup arrays)
+      # are opt-in. The answer to a red gate is to disable the config or fix the
+      # port, never to record the drift.
+      #
       # Why this exists: the kleaf families strip the ABI lists in
       # remove-protected-exports, so bazel's own protected-exports check has
       # nothing to compare and a config that grows an ABI struct builds green.
-      # Legacy families run compare_to_symbol_list, but against a list generated
-      # from the same tree, so it cannot show a difference either.
+      # Legacy families do run compare_to_symbol_list, but against a list
+      # generated from the same tree, so it cannot show a difference either.
       #
       # android/abi_gki_aarch64.stg ships in the kernel tree and carries
-      # `crc: 0x…` for every ABI-tracked symbol, so it is a real oracle.
-      #
-      # Policy: any watched symbol whose CRC differs from stock fails the build
-      # unless the exact <symbol, crc> pair is in .github/abi/allowlist-<family>.txt.
-      # That file is the record of what we changed on purpose - a port like
-      # fanotify's should need no entry at all, and an accident cannot land
-      # silently.
+      # `crc: 0x…` next to every ABI-tracked symbol (8,911 on 6.1), i.e. that
+      # family's stock ABI exactly as that tree defines it.
       shell: bash
       env:
         FAMILY: ${{ inputs.family }}
         MODE: ${{ inputs.mode }}
-        ALLOWLIST: ${{ github.workspace }}/.github/abi/allowlist-${{ inputs.family }}.txt
       run: |
-        # GitHub runs `shell: bash` as bash -e -o pipefail. -e turns any bare
-        # `[ -f x ] && cmd` guard or an expected non-zero grep into a step
-        # failure, so this step does its own error handling instead.
+        # GitHub runs `shell: bash` as bash -e -o pipefail; -e turns an expected
+        # non-zero (grep with no match, a guard test) into a step failure, so this
+        # step does its own error handling.
         set +e
 
         OURS=$(find -L . "${OUT_DIR:-/home/runner/out}" -maxdepth 8 \
@@ -52,12 +54,15 @@ runs:
           echo "::error title=ABI gate::no android/abi_gki_aarch64.stg in the tree - cannot verify the ABI"
           exit 1
         fi
-        echo "ABI gate: ours=$OURS stock=$STG family=$FAMILY mode=$MODE"
+        echo "ABI gate: family=$FAMILY mode=$MODE"
+        echo "ABI gate: ours=$OURS"
+        echo "ABI gate: stock=$STG"
 
+        # Module.symvers: <crc> <symbol> <module> <export>
         awk -F'\t' 'NF>=2 && $1 ~ /^0x/ {print $2"\t"$1}' "$OURS" | LC_ALL=C sort -u > /tmp/ours.tsv
 
-        # elf_symbol { id: 0x…  name: "sym" … crc: 0x…  }  - `crc:` is what
-        # modversions compares, `id:` is the type's id, not the CRC.
+        # .stg records are elf_symbol { id: 0x…  name: "sym" … crc: 0x…  }.
+        # `crc:` is the modversions CRC; `id:` is the type id.
         awk '
           /^elf_symbol \{/ {insym=1; nm=""; crc=""; next}
           insym && /^[[:space:]]*name:[[:space:]]*"/ {nm=$0; sub(/.*name:[[:space:]]*"/, "", nm); sub(/".*/, "", nm); next}
@@ -72,45 +77,31 @@ runs:
         drifted=$(wc -l < /tmp/drift.tsv)
 
         if [ "$MODE" = "update" ]; then
-          echo "ABI gate: mode=update - lines to commit into .github/abi/allowlist-$FAMILY.txt"
-          echo "BEGIN-ABI-ALLOWLIST"
-          awk -F'\t' '{printf "%s\t%s\t# was %s in stock\n", $1,$2,$3}' /tmp/drift.tsv
-          echo "END-ABI-ALLOWLIST"
+          echo "ABI gate: mode=update - $drifted of $compared symbols differ from stock"
+          echo "BEGIN-ABI-DRIFT"
+          awk -F'\t' '{printf "%s\t%s\t# stock %s\n", $1,$2,$3}' /tmp/drift.tsv
+          echo "END-ABI-DRIFT"
           exit 0
         fi
 
-        # drop the pairs we have on record
-        : > /tmp/allowed.tsv
-        : > /tmp/allowed.tsv
-        if [ -f "$ALLOWLIST" ]; then
-          grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST" \
-            | awk -F'\t' 'NF>=2 {print $1"\t"$2}' \
-            | LC_ALL=C sort -u > /tmp/allowed.tsv
-        fi
-        LC_ALL=C join -t $'\t' -v1 -1 1 -2 1 <(LC_ALL=C sort -u /tmp/drift.tsv) /tmp/allowed.tsv > /tmp/unexplained.tsv
-        # a symbol can drift from stock yet still match its allowed pair; join -v1
-        # above keeps rows whose (symbol,crc) pair is absent from the allowlist
-        unexplained=$(wc -l < /tmp/unexplained.tsv)
-
         {
           echo ""
-          echo "### ABI gate"
+          echo "### ABI gate - stock ABI of $FAMILY"
           echo ""
           echo "| | |"
           echo "|---|---|"
-          echo "| symbols compared | $compared |"
-          echo "| differ from stock | $drifted |"
-          echo "| explained by allowlist | $((drifted - unexplained)) |"
-          echo "| **unexplained** | **$unexplained** |"
+          echo "| symbols compared against stock | $compared |"
+          echo "| **differ from stock** | **$drifted** |"
           echo ""
         } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
-        if [ "$unexplained" -gt 0 ]; then
-          echo "ABI gate: $unexplained symbol(s) changed CRC with no allowlist entry:"
-          awk -F'\t' '{printf "  %s  ours=%s stock=%s\n", $1,$2,$3}' /tmp/unexplained.tsv | head -40
-          echo "$(awk -F'\t' '{print $1}' /tmp/unexplained.tsv | head -6 | tr '\n' ' ')" > /tmp/names
-          echo "::error title=ABI drift::$(cat /tmp/names)$([ "$unexplained" -gt 6 ] && echo "...") - $unexplained symbol(s) changed CRC. Re-dispatch this family with abi_mode=update, review the lines, and commit .github/abi/allowlist-$FAMILY.txt if the change is intended."
+        if [ "$drifted" -gt 0 ]; then
+          echo "ABI gate: $drifted symbol(s) differ from stock:"
+          awk -F'\t' '{printf "  %s  ours=%s stock=%s\n", $1,$2,$3}' /tmp/drift.tsv | head -40
+          [ "$drifted" -gt 40 ] && echo "  ... $((drifted - 40)) more - full list: re-dispatch with abi_mode=update"
+          printf '%s' "$(awk -F'\t' '{print $1}' /tmp/drift.tsv | head -6 | tr '\n' ' ')" > /tmp/names
+          echo "::error title=ABI drift::$(cat /tmp/names)$([ "$drifted" -gt 6 ] && echo "...") - $drifted symbol(s) no longer match the stock ABI. Disable the config that caused it (CFSBW / pids / fanotify) or fix the port; this repo keeps the stock ABI."
           exit 1
         fi
 
-        echo "ABI gate: $compared symbols compared, $drifted differ from stock, all covered by the allowlist"
+        echo "ABI gate: OK - $compared symbols compared against stock, 0 differ"
