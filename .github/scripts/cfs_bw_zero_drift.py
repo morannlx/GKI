@@ -285,7 +285,7 @@ def main() -> None:
         # guard on the struct, not on the accessor name - stage 1 already writes
         # cfs_bw_of() into the fallback accessor, which silently skipped this
         # whole stage on the last build
-        if "struct task_group_alloc" not in s2:
+        if "cfs_bw_tg_alloc_marker" not in s2:
             tg = re.search(r"(struct task_group \{\n)(.*?)(\n\};\n)", s2, re.S)
             if not tg:
                 die("sched.h: struct task_group not found")
@@ -306,6 +306,7 @@ def main() -> None:
 extern struct task_group root_task_group;
 extern struct cfs_bandwidth root_cfs_bw;
 
+/* cfs_bw_tg_alloc_marker: stage-2 guard, keep this string unique */
 /* one allocation carries both, so no extra pointer and no lookup */
 struct task_group_alloc {
 	struct task_group	tg;
@@ -325,6 +326,8 @@ static inline struct cfs_bandwidth *cfs_bw_of(struct task_group *tg)
             anchor = re.search(r"struct task_group \{\n.*?\n\};\n", s2, re.S)
             s2 = s2[:anchor.end()] + helper + s2[anchor.end():]
             write(sched_h, s2)
+            if "cfs_bw_tg_alloc_marker" not in read(sched_h):
+                die("sched.h: stage 2 did not land")
             print("  sched.h: cfs_bandwidth out of struct task_group, cfs_bw_of() added")
 
         # fair.c: the helper delegates now
@@ -380,7 +383,10 @@ static inline struct cfs_bandwidth *cfs_bw_of(struct task_group *tg)
     if "CONFIG_CFS_BANDWIDTH" in m.group(0):
         problems.append("struct cfs_rq still references CONFIG_CFS_BANDWIDTH")
     for needle, where in ((MARKER, "sched.h"), ("cpu_state", "sched.h"),
-                          ("cfs_rq_bw(struct cfs_rq", "sched.h")):
+                          ("cfs_rq_bw(struct cfs_rq", "sched.h"),
+                          ("cfs_bw_of(struct task_group", "sched.h"),
+                          ("struct task_group_alloc", "sched.h"),
+                          ("cfs_bw_to_cfs_rq", "sched.h")):
         if needle not in sched_now:
             problems.append(f"{where}: missing {needle!r}")
     s = read(fair_c)
